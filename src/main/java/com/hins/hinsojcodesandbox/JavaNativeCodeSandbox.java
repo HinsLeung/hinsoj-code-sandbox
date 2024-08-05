@@ -3,10 +3,13 @@ package com.hins.hinsojcodesandbox;
 import cn.hutool.core.io.FileUtil;
 import cn.hutool.core.io.resource.ResourceUtil;
 import cn.hutool.core.util.StrUtil;
+import cn.hutool.dfa.FoundWord;
+import cn.hutool.dfa.WordTree;
 import com.hins.hinsojcodesandbox.model.ExecuteCodeRequest;
 import com.hins.hinsojcodesandbox.model.ExecuteCodeResponse;
 import com.hins.hinsojcodesandbox.model.ExecuteMessage;
 import com.hins.hinsojcodesandbox.model.JudgeInfo;
+import com.hins.hinsojcodesandbox.security.DefaultSecurityManager;
 import com.hins.hinsojcodesandbox.utils.ProcessUtils;
 
 import java.io.File;
@@ -22,12 +25,25 @@ public class JavaNativeCodeSandbox implements CodeSandbox {
 
     private static final String GLOBAL_JAVA_CLASS_NAME = "Main.java";
 
+    private static final long TIME_OUT = 5000L;
+
+    private static final List<String> blackList = Arrays.asList("Files", "exec");
+
+    private static final WordTree WORE_TREE;
+
+    static {
+        // 初始化字典树
+        WORE_TREE = new WordTree();
+        WORE_TREE.addWords(blackList);
+    }
+
     public static void main(String[] args) {
         JavaNativeCodeSandbox javaNativeCodeSandbox = new JavaNativeCodeSandbox();
         ExecuteCodeRequest executeCodeRequest = new ExecuteCodeRequest();
         executeCodeRequest.setInputList(Arrays.asList("2 2", "3 3"));
-        String code = ResourceUtil.readStr("testCode/simpleComputeArgs/Main.java", StandardCharsets.UTF_8);
+//        String code = ResourceUtil.readStr("testCode/simpleComputeArgs/Main.java", StandardCharsets.UTF_8);
 //        String code = ResourceUtil.readStr("testCode/simpleCompute/Main.java", StandardCharsets.UTF_8);
+        String code = ResourceUtil.readStr("testCode/unsafeCode/ReadFileError.java", StandardCharsets.UTF_8);
         executeCodeRequest.setCode(code);
         executeCodeRequest.setLanguage("java");
 
@@ -38,9 +54,20 @@ public class JavaNativeCodeSandbox implements CodeSandbox {
     @Override
     public ExecuteCodeResponse executeCode(ExecuteCodeRequest executeCodeRequest) {
 
+        System.setSecurityManager(new DefaultSecurityManager());
+
         List<String> inputList = executeCodeRequest.getInputList();
         String code = executeCodeRequest.getCode();
         String language = executeCodeRequest.getLanguage();
+
+        //校验代码中是否包含黑名单中的单词
+        FoundWord foundWord = WORE_TREE.matchWord(code);
+        if(foundWord != null){
+            System.out.println("包含禁止词" + foundWord.getFoundWord());
+            return null;
+        }
+
+        //1.把用户的代码保存文件
 
         String userDir = System.getProperty("user.dir");
         String globalCodePathName = userDir + File.separator + GLOBAL_COOE_DIR_NAME;
@@ -69,9 +96,22 @@ public class JavaNativeCodeSandbox implements CodeSandbox {
 
         List<ExecuteMessage> executeMessageList = new ArrayList<>();
         for (String inputArgs : inputList) {
-            String runCmd = String.format("java -Dfile.encoding=UTF-8 -cp %s Main %s", userCodeParentPath, inputArgs);
+            //限制内存是256MB(最大堆空间大小)
+            String runCmd = String.format("java -Xmx256m -Dfile.encoding=UTF-8 -cp %s Main %s", userCodeParentPath, inputArgs);
+
             try {
                 Process runProcess = Runtime.getRuntime().exec(runCmd);
+                //守护线程限制时间
+                new Thread(() -> {
+                    try {
+                        Thread.sleep(TIME_OUT);
+                        System.out.println("超时了，中断");
+                        runProcess.destroy();
+                    } catch (InterruptedException e) {
+                        throw new RuntimeException(e);
+                    }
+                }).start();
+
                 ExecuteMessage executeMessage = ProcessUtils.runProcessAndGetMessage(runProcess, "运行");
 //                ExecuteMessage executeMessage = ProcessUtils.runInteractProcessAndGetMessage(runProcess, "运行",inputArgs);
                 System.out.println(executeMessage);
@@ -120,17 +160,16 @@ public class JavaNativeCodeSandbox implements CodeSandbox {
         //6.错误处理 提升程序健壮性
 
 
-
-
         return executeCodeResponse;
     }
 
     /**
      * 获取错误响应
+     *
      * @param e
      * @return
      */
-    private ExecuteCodeResponse getErrorResponse(Throwable e){
+    private ExecuteCodeResponse getErrorResponse(Throwable e) {
         ExecuteCodeResponse executeCodeResponse = new ExecuteCodeResponse();
         executeCodeResponse.setOutputList(new ArrayList<>());
         executeCodeResponse.setMessage(e.getMessage());
