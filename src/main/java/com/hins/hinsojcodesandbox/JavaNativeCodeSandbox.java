@@ -97,7 +97,9 @@ public class JavaNativeCodeSandbox implements CodeSandbox {
         List<ExecuteMessage> executeMessageList = new ArrayList<>();
         for (String inputArgs : inputList) {
             //限制内存是256MB(最大堆空间大小)
-            String runCmd = String.format("java -Xmx256m -Dfile.encoding=UTF-8 -cp %s Main %s", userCodeParentPath, inputArgs);
+//            String runCmd = String.format("java -Xmx256m -Dfile.encoding=UTF-8 -cp %s Main %s", userCodeParentPath, inputArgs);
+            String runCmd = String.format("java -Xmx256m -Dfile.encoding=UTF-8 -cp %s;%s -Djava.security.manager=MySecurityManage Main %s", userCodeParentPath, inputArgs);
+
 
             try {
                 Process runProcess = Runtime.getRuntime().exec(runCmd);

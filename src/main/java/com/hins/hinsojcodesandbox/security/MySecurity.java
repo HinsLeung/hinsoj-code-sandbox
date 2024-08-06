@@ -7,7 +7,7 @@ public class MySecurity extends SecurityManager{
     // 检查所有的权限
     @Override
     public void checkPermission(Permission perm) {
-        super.checkPermission(perm);
+//        super.checkPermission(perm);
     }
 
     // 检测程序是否可执行
