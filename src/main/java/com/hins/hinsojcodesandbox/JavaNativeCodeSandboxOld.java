@@ -11,7 +11,6 @@ import com.hins.hinsojcodesandbox.model.ExecuteMessage;
 import com.hins.hinsojcodesandbox.model.JudgeInfo;
 import com.hins.hinsojcodesandbox.security.DefaultSecurityManager;
 import com.hins.hinsojcodesandbox.utils.ProcessUtils;
-import lombok.extern.slf4j.Slf4j;
 
 import java.io.File;
 import java.nio.charset.StandardCharsets;
@@ -20,14 +19,37 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
 
-@Slf4j
-public abstract class JavaCodeSandboxTemplate implements CodeSandbox{
+public class JavaNativeCodeSandboxOld implements CodeSandbox {
 
     private static final String GLOBAL_COOE_DIR_NAME = "tmpCode";
 
     private static final String GLOBAL_JAVA_CLASS_NAME = "Main.java";
 
     private static final long TIME_OUT = 5000L;
+
+    private static final List<String> blackList = Arrays.asList("Files", "exec");
+
+    private static final WordTree WORE_TREE;
+
+    static {
+        // 初始化字典树
+        WORE_TREE = new WordTree();
+        WORE_TREE.addWords(blackList);
+    }
+
+    public static void main(String[] args) {
+        JavaNativeCodeSandboxOld javaNativeCodeSandbox = new JavaNativeCodeSandboxOld();
+        ExecuteCodeRequest executeCodeRequest = new ExecuteCodeRequest();
+        executeCodeRequest.setInputList(Arrays.asList("2 2", "3 3"));
+//        String code = ResourceUtil.readStr("testCode/simpleComputeArgs/Main.java", StandardCharsets.UTF_8);
+//        String code = ResourceUtil.readStr("testCode/simpleCompute/Main.java", StandardCharsets.UTF_8);
+        String code = ResourceUtil.readStr("testCode/unsafeCode/ReadFileError.java", StandardCharsets.UTF_8);
+        executeCodeRequest.setCode(code);
+        executeCodeRequest.setLanguage("java");
+
+        ExecuteCodeResponse executeCodeResponse = javaNativeCodeSandbox.executeCode(executeCodeRequest);
+        System.out.println(executeCodeResponse);
+    }
 
     @Override
     public ExecuteCodeResponse executeCode(ExecuteCodeRequest executeCodeRequest) {
@@ -38,38 +60,13 @@ public abstract class JavaCodeSandboxTemplate implements CodeSandbox{
         String code = executeCodeRequest.getCode();
         String language = executeCodeRequest.getLanguage();
 
-        //1.把用户的代码保存文件
-        File userCodeFile = saveCodeToFile(code);
-
-
-        //2.编译代码，得到class文件
-        ExecuteMessage compileFileExecuteMessage = compileFile(userCodeFile);
-        System.out.println(compileFileExecuteMessage);
-
-
-        //3.执行代码、得到输出结果
-
-        List<ExecuteMessage> executeMessageList = runFile(userCodeFile, inputList);
-
-        //4.手机整理输出结果
-        ExecuteCodeResponse outputResponse = getOutputResponse(executeMessageList);
-
-        //5.文件清理
-        boolean b = deleteFile((userCodeFile));
-        if (!b){
-            log.error("deleteFile Error, userCodeFilePath = {}", userCodeFile.getAbsolutePath());
+        //校验代码中是否包含黑名单中的单词
+        FoundWord foundWord = WORE_TREE.matchWord(code);
+        if(foundWord != null){
+            System.out.println("包含禁止词" + foundWord.getFoundWord());
+            return null;
         }
 
-        return outputResponse;
-
-    }
-
-    /**
-     * 1.把用户的代码保存为文件
-     * @param code
-     * @return
-     */
-    public File saveCodeToFile(String code) {
         //1.把用户的代码保存文件
 
         String userDir = System.getProperty("user.dir");
@@ -78,47 +75,31 @@ public abstract class JavaCodeSandboxTemplate implements CodeSandbox{
         if (!FileUtil.exist(globalCodePathName)) {
             FileUtil.mkdir(globalCodePathName);
         }
+
         //把用户的代码隔离存放
         String userCodeParentPath = globalCodePathName + File.separator + UUID.randomUUID();
         String userCodePath = userCodeParentPath + File.separator + GLOBAL_JAVA_CLASS_NAME;
         File userCodeFide = FileUtil.writeString(code, userCodePath, StandardCharsets.UTF_8);
 
-        return userCodeFide;
-    }
-
-    /**
-     * 2.编译代码，得到class文件
-     * @param userCodeFide
-     * @return
-     */
-    public ExecuteMessage compileFile(File userCodeFide) {
+        //编译代码，得到class文件
         String compileCmd = String.format("javac -encoding utf-8 %s", userCodeFide.getAbsolutePath());
         try {
             Process compileProcess = Runtime.getRuntime().exec(compileCmd);
             ExecuteMessage executeMessage = ProcessUtils.runProcessAndGetMessage(compileProcess, "编译");
-            if (executeMessage.getExitValue() != 0){
-                throw new RuntimeException("编译错误");
-            }
-            return executeMessage;
+            System.out.println(executeMessage);
         } catch (Exception e) {
-//            return getErrorResponse(e);
-            throw new RuntimeException(e);
+            return getErrorResponse(e);
         }
-    }
 
-    /**
-     * 3.执行文件。获得执行结果类
-     * @param userCodeFile
-     * @param inputList
-     * @return
-     */
-    public List<ExecuteMessage> runFile(File userCodeFile, List<String> inputList){
-        String userCodeParentPath = userCodeFile.getParentFile().getAbsolutePath();
+
+        //3.执行代码、得到输出结果
+
         List<ExecuteMessage> executeMessageList = new ArrayList<>();
         for (String inputArgs : inputList) {
             //限制内存是256MB(最大堆空间大小)
 //            String runCmd = String.format("java -Xmx256m -Dfile.encoding=UTF-8 -cp %s Main %s", userCodeParentPath, inputArgs);
-            String runCmd = String.format("java -Xmx256m -Dfile.encoding=UTF-8 -cp %s Main %s", userCodeParentPath, inputArgs);
+            String runCmd = String.format("java -Xmx256m -Dfile.encoding=UTF-8 -cp %s;%s -Djava.security.manager=MySecurityManage Main %s", userCodeParentPath, inputArgs);
+
 
             try {
                 Process runProcess = Runtime.getRuntime().exec(runCmd);
@@ -138,18 +119,11 @@ public abstract class JavaCodeSandboxTemplate implements CodeSandbox{
                 System.out.println(executeMessage);
                 executeMessageList.add(executeMessage);
             } catch (Exception e) {
-                throw new  RuntimeException("程序执行异常",e);
+                return getErrorResponse(e);
             }
         }
-        return executeMessageList;
-    }
 
-    /**
-     * 4.获取输出结果
-     * @param executeMessageList
-     * @return
-     */
-    public ExecuteCodeResponse getOutputResponse(List<ExecuteMessage> executeMessageList){
+        //4.手机整理输出结果
         ExecuteCodeResponse executeCodeResponse = new ExecuteCodeResponse();
         List<String> outputList = new ArrayList<>();
         //取用时最大值，便于判断是否超时
@@ -178,27 +152,21 @@ public abstract class JavaCodeSandboxTemplate implements CodeSandbox{
         judgeInfo.setTime(maxTime);
 
         executeCodeResponse.setJudgeInfo(judgeInfo);
+
+        //5.文件清理
+        if (userCodeFide.getParentFile() != null) {
+            boolean del = FileUtil.del(userCodeParentPath);
+            System.out.println("删除" + (del ? "成功" : "失败"));
+        }
+
+        //6.错误处理 提升程序健壮性
+
+
         return executeCodeResponse;
     }
 
     /**
-     * 5.删除文件
-     * @param userCodeFile
-     * @return
-     */
-    public boolean deleteFile(File userCodeFile){
-        if (userCodeFile.getParentFile() != null) {
-            String userCodeParentPath = userCodeFile.getParentFile().getAbsolutePath();
-            boolean del = FileUtil.del(userCodeParentPath);
-            System.out.println("删除" + (del ? "成功" : "失败"));
-            return del;
-        }
-        return true;
-    }
-
-
-    /**
-     * 6.获取错误响应
+     * 获取错误响应
      *
      * @param e
      * @return
@@ -213,5 +181,4 @@ public abstract class JavaCodeSandboxTemplate implements CodeSandbox{
         return executeCodeResponse;
 
     }
-
 }
